@@ -1,9 +1,19 @@
 # cokoban
 
 Sokoban game which can be played in the terminal.
-TODO to run do this and that
 
-    cat plansza.txt - | ./sokoban
+Project works for a Linux system with a working gcc compiler, to run tests you
+should have [valgrind](https://valgrind.org/). A [Makefile](Makefile) with a
+default compilation command is supplied. It also has phony targets clean and
+test. Running `make` produces a `build/sokoban` binary which operates on
+standard input and standard output.
+
+Here's how you can run the program from the project's root directory while using
+one of the example boards from the [tests](tests) directory.
+
+```bash
+cat tests/board7.txt - | build/sokoban
+```
 
 ## Introduction
 
@@ -43,35 +53,16 @@ that starts with a dot `.`.
 
 The program ignores the input content after the data-ending dot.
 
-The description of the board consists of non-empty rows in which there are one-character representations of the field state:
+The description of the board consists of non-empty lines in which there are one
+character representations of the fields:
 
-    -
-
-    an empty field that is not the target field,
-
-    +
-
-    the empty field that is the target field,
-
-    #
-
-    the wall,
-
-    @
-
-    field, which is not the target field on which the character is,
-
-    *
-
-    the target field where the character is,
-
-    [a .. z](small letter)
-
-    a field that is not a target field on which is a box with the given name,
-
-    [A .. Z](large letter)
-
-    the target field on which is a box called a lowercase corresponding to the given capital letter.
+- `-` - an empty field that is not the target field,
+- `+` - the empty field that is the target field,
+- `#` - the wall,
+- `@` - field, which is not the target field on which the character is,
+- `*` - the target field where the character is,
+- `[a .. z](small letter)` - a field that is not a target field on which is a box with the given name,
+- `[A .. Z](large letter)` - the target field on which is a box called a lowercase corresponding to the given capital letter.
 
 In the correct description of the board there is exactly one character. Each box, marked with the letter of the Latin alphabet, can only occur once.
 
