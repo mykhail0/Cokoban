@@ -79,7 +79,7 @@ inspired from the numpad:
   - 2 - down,
   - 8 - up,
   - 4 - left,
-  - 6 - right.
+  - 6 - right.\
 For the command to succeed there should exist a path of empty fields from the
 character to the field from which the push should be made and the box should be
 pushable in the specified direction. If there is no such path or the chest
