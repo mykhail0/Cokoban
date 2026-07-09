@@ -1,360 +1,386 @@
+#include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Constants for memory reallocation utilities.
 #define MULTIPLIER 3
 #define DIVISOR 2
 
+// Number of letters in the Latin alphabet.
+#define MAX_BOX_NUM 26
+
 #define NOBOX (-1)
 
 // Object's position on the board.
-struct pos {
+typedef struct {
   int line;
   int col;
-};
+} Pos;
 
 // Board's state.
 typedef struct {
-  struct pos player;
-  struct pos box[26];
-} Tstate;
+  Pos player;
+  Pos box[MAX_BOX_NUM];
+} State;
+
+// Assumes that name is a character in the Latin alphabet.
+int box_name_to_index(int name) {
+  return name - ('A' <= name && name <= 'Z' ? 'A' : 'a');
+}
 
 /**
- * Rekord opisujacy pojedyncza linijke planszy.
- * `len` to liczba kratek w linijce, `line` opisuje kratki.
+ * Description of one row of the board.
+ * `len` - number of fields in the row,
+ * `line` - specification for each field in the row.
  */
-struct line {
+typedef struct {
   int len;
   char* line;
-};
+} Line;
 
 /**
- * Plansza.
- * `lines` to liczba linijek na planszy, `board` opisuje linijki.
+ * Description of the board.
+ * `lines` - number of rows on the board,
+ * `board` - describes contents of each row.
  */
-struct board {
+typedef struct {
   int lines;
-  struct line* board;
-};
+  Line* board;
+} Board;
 
-// Obsluga stosu stanow planszy.
+// History of board states as a stack for undo purposes.
 struct list {
-  Tstate state;
+  State state;
   struct list* next;
 };
-typedef struct list Tstack;
+typedef struct list Stack;
 
-void init(Tstack** s) { *s = NULL; }
+void init(Stack** s) { *s = NULL; }
 
-bool empty(Tstack* s) { return s == NULL; }
+bool empty(Stack* s) { return s == NULL; }
 
-void push(Tstack** s, Tstate x) {
-  Tstack* tmp;
+void push(Stack** s, State x) {
+  Stack* tmp;
   tmp = malloc(sizeof(*tmp));
+  assert(tmp != NULL);
   tmp->next = *s;
   tmp->state = x;
   *s = tmp;
 }
 
-void pop(Tstack** s, Tstate* x) {
+void pop(Stack** s, State* x) {
   *x = (*s)->state;
-  Tstack* tmp = *s;
+  Stack* tmp = *s;
   *s = (*s)->next;
   free(tmp);
 }
 
-void top(Tstack** s, Tstate* x) {
+void top(Stack** s, State* x) {
   pop(s, x);
   push(s, *x);
 }
 
-void clear(Tstack** s) {
+void clear(Stack** s) {
   while (!empty(*s)) {
-    Tstate x;
+    State x;
     pop(s, &x);
   }
 }
 
 int more(int n) { return 1 + n * MULTIPLIER / DIVISOR; }
 
-// Realokuje plansze, jesli trzeba.
-void realloc_board(struct board* board, int* size, int n) {
-  if (n == *size) {
+// Reallocate the board if needed.
+void realloc_board(Board* board, int* size) {
+  if (board->lines == *size) {
     *size = more(*size);
     board->board = realloc(board->board, (*size) * sizeof *(board->board));
+    assert(board->board != NULL);
+    for (int i = board->lines; i < *size; ++i) {
+      board->board[i].len = 0;
+      board->board[i].line = NULL;
+    }
   }
 }
 
-// Realokuje linijke planszy, jesli trzeba.
-void realloc_line(struct line* line, int* size, int n) {
-  if (n == *size) {
+// Reallocate the row if needed.
+void realloc_line(Line* line, int* size) {
+  if (line->len == *size) {
     *size = more(*size);
     line->line = realloc(line->line, (*size) * sizeof *(line->line));
+    assert(line->line != NULL);
   }
 }
 
-void init_state(Tstate* state) {
-  for (int i = 0; i < 26; ++i) {
+static Board board;
+static Stack* states;
+
+// Free the memory.
+void clean_up(Board* board, Stack** states) {
+  for (int i = 0; i < board->lines; ++i) free(board->board[i].line);
+  free(board->board);
+  clear(states);
+}
+
+void init_state(State* state) {
+  assert(state != NULL);
+  for (int i = 0; i < MAX_BOX_NUM; ++i) {
     state->box[i].line = NOBOX;
     state->box[i].col = NOBOX;
   }
 }
 
-// Wczytuje plansze i jej poczatkowy stan.
-void read_board(struct board* board, Tstate* state) {
-  init_state(state);
+int my_getchar() {
+  int c = getchar();
+  if (c == EOF) {
+    perror("getchar()");
+    clean_up(&board, &states);
+    exit(EXIT_FAILURE);
+  }
+  return c;
+}
+
+int read_board_getchar() {
+  static char ALLOWED_CHARS[] = {'-', '+', '#', '@', '*', '\n', '\0'};
+  int c = my_getchar();
+  if (strchr(ALLOWED_CHARS, c) == NULL && (c < 'a' || 'z' < c) &&
+      (c < 'A' || 'Z' < c)) {
+    perror(
+        "Invalid character, valid input for the board is only "
+        "Latin alphabet letters, new line and -+#@*");
+    clean_up(&board, &states);
+    exit(EXIT_FAILURE);
+  }
+
+  return c;
+}
+
+void init_board(Board* board, int* board_size) {
+  assert(board != NULL);
   board->board = NULL;
-  int c = getchar(), line = 0, col = 0, lineSize = 0, boardSize = 0;
-  realloc_board(board, &boardSize, line);
-  board->board[line].line = NULL;
-  while (c != '\n') {
-    realloc_line(&(board->board[line]), &lineSize, col);
-    if (('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')) {
-      board->board[line].len = col;
-      char ch;
-      int fLetter;
-      if ('A' <= c && c <= 'Z') {
-        fLetter = 'A';
-        ch = '+';
-      } else {
-        fLetter = 'a';
-        ch = '-';
-      }
-      board->board[line].line[col] = ch;
-      state->box[c - fLetter].line = line;
-      state->box[c - fLetter].col = col;
+  *board_size = board->lines = 0;
+  realloc_board(board, board_size);
+}
+
+// Add the next character from input onto the board and state.
+void add_ch_to_board(Board* board, State* state, int c) {
+  if (('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')) {
+    board->board[board->lines].line[board->board[board->lines].len] =
+        'A' <= c && c <= 'Z' ? '+' : '-';
+    c = box_name_to_index(c);
+    state->box[c].line = board->lines;
+    state->box[c].col = board->board[board->lines].len;
+  } else {
+    if (c == '-' || c == '+' || c == '#') {
+      board->board[board->lines].line[board->board[board->lines].len] = c;
     } else {
-      switch (c) {
-        case '-':
-          board->board[line].line[col] = '-';
-          break;
-        case '+':
-          board->board[line].line[col] = '+';
-          break;
-        case '#':
-          board->board[line].line[col] = '#';
-          break;
-        case '@':
-          board->board[line].line[col] = '-';
-          state->player.line = line;
-          state->player.col = col;
-          break;
-        case '*':
-          board->board[line].line[col] = '+';
-          state->player.line = line;
-          state->player.col = col;
-          break;
-      }
+      state->player.line = board->lines;
+      state->player.col = board->board[board->lines].len;
+      board->board[board->lines].line[board->board[board->lines].len] =
+          c == '@' ? '-' : '+';
     }
-    col++;
-    board->board[line].len = col;
-    c = getchar();
+  }
+}
+
+// Read the board's initial state.
+void read_board(Board* board, State* state) {
+  int c = read_board_getchar(), line_size = 0, board_size;
+  init_board(board, &board_size);
+
+  while (c != '\n') {
+    realloc_line(&(board->board[board->lines]), &line_size);
+    add_ch_to_board(board, state, c);
+    ++(board->board[board->lines].len);
+    c = read_board_getchar();
+
     if (c == '\n') {
-      line++;
-      board->lines = line;
-      lineSize = 0;
-      realloc_board(board, &boardSize, line);
-      col = 0;
-      board->board[line].line = NULL;
-      c = getchar();
+      ++(board->lines);
+      realloc_board(board, &board_size);
+      line_size = 0;
+      c = read_board_getchar();
     }
   }
 }
 
-// Zamienia pusta plansze na plansze w pewnym stanie.
-void apply_state_to_board(Tstate state, struct board* board) {
-  for (int i = 0; i < 26; ++i) {
+// Draws appropriate boxes and player as specified by `state` onto `board`.
+void apply_state_to_board(State state, Board* board) {
+  for (int i = 0; i < MAX_BOX_NUM; ++i) {
     if (state.box[i].line != NOBOX) {
-      if (board->board[state.box[i].line].line[state.box[i].col] == '-')
-        board->board[state.box[i].line].line[state.box[i].col] = i + 'a';
-      else
-        board->board[state.box[i].line].line[state.box[i].col] = i + 'A';
+      board->board[state.box[i].line].line[state.box[i].col] =
+          i + (board->board[state.box[i].line].line[state.box[i].col] == '-'
+                   ? 'a'
+                   : 'A');
     }
   }
-  if (board->board[state.player.line].line[state.player.col] == '-')
-    board->board[state.player.line].line[state.player.col] = '@';
-  else
-    board->board[state.player.line].line[state.player.col] = '*';
+  board->board[state.player.line].line[state.player.col] =
+      board->board[state.player.line].line[state.player.col] == '-' ? '@' : '*';
 }
 
-// Zamienia plansze na pusta plansze.
-void make_default(Tstate state, struct board* board) {
-  for (int i = 0; i < 26; ++i) {
+// Assuming `state` correctly describes `board`'s state, remove boxes and the
+// player's character from the `board`.
+void make_default(State state, Board* board) {
+  for (int i = 0; i < MAX_BOX_NUM; ++i) {
     if (state.box[i].line != NOBOX) {
-      if ('a' <= board->board[state.box[i].line].line[state.box[i].col] &&
-          board->board[state.box[i].line].line[state.box[i].col] <= 'z')
-        board->board[state.box[i].line].line[state.box[i].col] = '-';
-      else
-        board->board[state.box[i].line].line[state.box[i].col] = '+';
+      board->board[state.box[i].line].line[state.box[i].col] =
+          ('a' <= board->board[state.box[i].line].line[state.box[i].col] &&
+           board->board[state.box[i].line].line[state.box[i].col] <= 'z')
+              ? '-'
+              : '+';
     }
   }
-  if (board->board[state.player.line].line[state.player.col] == '@')
-    board->board[state.player.line].line[state.player.col] = '-';
-  else
-    board->board[state.player.line].line[state.player.col] = '+';
+  board->board[state.player.line].line[state.player.col] =
+      board->board[state.player.line].line[state.player.col] == '@' ? '-' : '+';
 }
 
-// Przygotowuje program do gry.
-void init_sequence(Tstack** states, struct board* board) {
-  Tstate state;
+// Prepare for the game.
+void init_sequence(Stack** states, Board* board) {
+  State state;
+  init_state(&state);
   read_board(board, &state);
   init(states);
   push(states, state);
   apply_state_to_board(state, board);
 }
 
-// Tablica pomocnicza do konwersji kierunku pchniecia na zmiane polozenia.
-int Conversion[4][2] = {{1, 0},    // 2
-                        {0, -1},   // 4
-                        {0, 1},    // 6
-                        {-1, 0}};  // 8
+typedef enum { DOWN, LEFT, RIGHT, UP } Direction;
+const char ALLOWED_DIRECTIONS[] = {'2', '4', '6', '8', '\0'};
 
-// Zamienia nazwe skrzyni na jej indeks w tablicy skrzyn.
-int turn_name_to_index(int name) {
-  int fLetter;
-  if ('A' <= name && name <= 'Z')
-    fLetter = 'A';
-  else
-    fLetter = 'a';
-  return name - fLetter;
+Direction direction(int ch) { return (ch - '0') / 2 - 1; }
+Direction opposite(Direction dir) { return 3 - dir; }
+
+// Convert direction to the change in coordinates on the board.
+const int DIR_TO_COORD_CHANGE[4][2] = {{1, 0}, {0, -1}, {0, 1}, {-1, 0}};
+
+// Writes to `*dest` coordinates of the `box` after a push in direction `dir`.
+void move_to_dest_pos(Pos* dest, State state, int box, Direction dir) {
+  if (state.box[box].line == NOBOX || state.box[box].col == NOBOX) {
+    perror("Trying to move a box that does not exist on the board.");
+    clean_up(&board, &states);
+    exit(EXIT_FAILURE);
+  }
+  dest->line = state.box[box].line + DIR_TO_COORD_CHANGE[dir][0];
+  dest->col = state.box[box].col + DIR_TO_COORD_CHANGE[dir][1];
 }
 
-/**
- * Zapisuje w `*dest` wspolrzedne komorki,
- * gdzie ma trafic skrzynia po pchnieciu `box``dir`.
- */
-void translate_move_to_pos(struct pos* dest, Tstate state, int box, int dir) {
-  dest->line = state.box[box].line + Conversion[dir][0];
-  dest->col = state.box[box].col + Conversion[dir][1];
-}
-
-// Sprawdza czy da sie postawic gracza czy skrzynie na pozycje `pos`.
-bool validate_pos(struct board board, struct pos pos) {
-  bool canDoIt = false;
+// Check if it's possible to put the character or a box in position `pos`.
+bool is_valid_and_free(Board board, Pos pos) {
+  bool is_valid = false;
   if (-1 < pos.line && pos.line < board.lines && -1 < pos.col &&
       pos.col < board.board[pos.line].len) {
-    char analyzedCh = board.board[pos.line].line[pos.col];
-    if ((analyzedCh < 'a' || 'z' < analyzedCh) &&
-        (analyzedCh < 'A' || 'Z' < analyzedCh) && (analyzedCh != '#'))
-      canDoIt = true;
+    char field = board.board[pos.line].line[pos.col];
+    if ((field < 'a' || 'z' < field) && (field < 'A' || 'Z' < field) &&
+        field != '#')
+      is_valid = true;
   }
-  return canDoIt;
+  return is_valid;
 }
 
-// Obsluga kolejki, ktora jest magazynem dla BFS.
+// Queue data structure for purposes of BFS.
 struct qlist {
-  struct pos pos;
+  Pos pos;
   struct qlist* next;
 };
-typedef struct qlist Tqlist;
+typedef struct qlist Qlist;
 
 typedef struct {
-  Tqlist* front;
-  Tqlist* rear;
-} Tqueue;
+  Qlist* front;
+  Qlist* rear;
+} Queue;
 
-void initq(Tqueue* q) {
+void initq(Queue* q) {
   q->front = NULL;
   q->rear = q->front;
 }
 
-bool emptyq(Tqueue q) { return q.front == NULL; }
+bool emptyq(Queue q) { return q.front == NULL; }
 
-void pushq(Tqueue* q, struct pos x) {
+void pushq(Queue* q, Pos x) {
   if (q->front) {
     q->rear->next = malloc(sizeof *(q->rear->next));
+    assert(q->rear->next != NULL);
     q->rear->next->pos = x;
     q->rear = q->rear->next;
   } else {
     q->rear = malloc(sizeof *(q->rear));
+    assert(q->rear != NULL);
     q->rear->pos = x;
     q->front = q->rear;
   }
   q->rear->next = NULL;
 }
 
-void popq(Tqueue* q, struct pos* x) {
+void popq(Queue* q, Pos* x) {
   *x = q->front->pos;
-  Tqlist* tmp = q->front;
+  Qlist* tmp = q->front;
   q->front = q->front->next;
   free(tmp);
 }
 
-void clearq(Tqueue* q) {
+void clearq(Queue* q) {
   while (!emptyq(*q)) {
-    struct pos x;
+    Pos x;
     popq(q, &x);
   }
 }
 
-/**
- * Inicjuje tablice,
- * ktora przechowuje informacje o przetworzonych komorkach planszy.
- */
-void init_discovered(bool*** t, struct board board) {
-  *t = malloc(board.lines * sizeof(bool*));
-  for (int i = 0; i < board.lines; ++i)
-    (*t)[i] = malloc(board.board[i].len * sizeof *((*t)[i]));
+// Initialize array of cells that have been processed in the BFS.
+void init_seen(bool*** seen, Board board) {
+  *seen = malloc(board.lines * sizeof(bool*));
+  assert(*seen != NULL);
   for (int i = 0; i < board.lines; ++i) {
-    for (int j = 0; j < board.board[i].len; ++j) (*t)[i][j] = false;
+    (*seen)[i] = malloc(board.board[i].len * sizeof *((*seen)[i]));
+    assert((*seen)[i] != NULL);
+  }
+  for (int i = 0; i < board.lines; ++i) {
+    for (int j = 0; j < board.board[i].len; ++j) (*seen)[i][j] = false;
   }
 }
 
-// Zwalnia pamiec zaalokowana przez tablice przetworzonych komorek planszy.
-void clear_discovered(bool*** t, struct board board) {
-  for (int i = 0; i < board.lines; ++i) free((*t)[i]);
-  free(*t);
+void clear_seen(bool*** seen, Board board) {
+  for (int i = 0; i < board.lines; ++i) free((*seen)[i]);
+  free(*seen);
 }
 
-// Wylicza i zapisuje w tablicy `t` wspolrzedne sasiadow komorki x.
-void calc_neighbours(struct pos t[4], struct pos x) {
+// Writes neighbour candidates of `x` into `t`.
+void get_neighbour_candidates(Pos t[4], Pos x) {
   for (int i = 0; i < 4; ++i) {
-    t[i].line = x.line + Conversion[i][0];
-    t[i].col = x.col + Conversion[i][1];
+    t[i].line = x.line + DIR_TO_COORD_CHANGE[i][0];
+    t[i].col = x.col + DIR_TO_COORD_CHANGE[i][1];
   }
 }
 
-/**
- * Zapisuje do magazynu wspolrzedne tych sasiadow,
- * gdzie mozna postawic skrzynie lub gracza.
- */
-void add_neighbours(struct pos t[4], struct board board, Tqueue* container,
-                    bool** Discovered) {
+// Adds valid neighbours from neighbour candidates to the queue.
+void add_neighbours(Pos t[4], Board board, Queue* q, bool** seen) {
   for (int i = 0; i < 4; ++i) {
-    if (validate_pos(board, t[i]) && !Discovered[t[i].line][t[i].col]) {
-      Discovered[t[i].line][t[i].col] = true;
-      pushq(container, t[i]);
+    if (is_valid_and_free(board, t[i]) && !seen[t[i].line][t[i].col]) {
+      seen[t[i].line][t[i].col] = true;
+      pushq(q, t[i]);
     }
   }
 }
 
-/**
- * Sprawdza czy istnieje sciezka prowadzaca gracza do pozycji,
- * z ktorej musi wykonac pchniecie.
- */
-bool find_path(struct board board, struct pos player, struct pos dest) {
-  bool **Discovered, succ = false;
-  init_discovered(&Discovered, board);
-  Tqueue container;
-  initq(&container);
-  pushq(&container, player);
-  Discovered[player.line][player.col] = true;
-  while (!emptyq(container) && !succ) {
-    struct pos current, neighbours[4];
-    popq(&container, &current);
-    succ = (current.line == dest.line && current.col == dest.col);
-    calc_neighbours(neighbours, current);
-    add_neighbours(neighbours, board, &container, Discovered);
+bool path_exists(Board board, Pos player, Pos dest) {
+  bool **seen, found_path = false;
+  init_seen(&seen, board);
+  Queue q;
+  initq(&q);
+  pushq(&q, player);
+  seen[player.line][player.col] = true;
+  while (!emptyq(q) && !found_path) {
+    Pos current, neighbours[4];
+    popq(&q, &current);
+    found_path = (current.line == dest.line && current.col == dest.col);
+    get_neighbour_candidates(neighbours, current);
+    add_neighbours(neighbours, board, &q, seen);
   }
-  clear_discovered(&Discovered, board);
-  clearq(&container);
-  return succ;
+  clear_seen(&seen, board);
+  clearq(&q);
+  return found_path;
 }
 
-// Obsluga ruchu `0`.
-void undo(Tstack** states, struct board* board) {
-  Tstate state;
+void undo(Stack** states, Board* board) {
+  State state;
   pop(states, &state);
   if (!empty(*states)) {
     make_default(state, board);
@@ -365,27 +391,23 @@ void undo(Tstack** states, struct board* board) {
   }
 }
 
-// Zmienia stan na stan po ruchu `box``dir`.
-void change_state(Tstate* state, int box, struct pos newBoxPos) {
+void change_state(State* state, int box, Pos box_new_pos) {
   state->player.line = state->box[box].line;
   state->player.col = state->box[box].col;
-  state->box[box] = newBoxPos;
+  state->box[box] = box_new_pos;
 }
 
-// Wykonuje ruch `box``dir`.
-void make_move(Tstack** states, struct board* board, int box,
-               struct pos newBoxPos) {
-  Tstate currentState;
-  top(states, &currentState);
-  Tstate newState = currentState;
-  change_state(&newState, box, newBoxPos);
-  push(states, newState);
-  make_default(currentState, board);
-  apply_state_to_board(newState, board);
+void make_move(Stack** states, Board* board, int box, Pos box_new_pos) {
+  State current_state;
+  top(states, &current_state);
+  State new_state = current_state;
+  change_state(&new_state, box, box_new_pos);
+  push(states, new_state);
+  make_default(current_state, board);
+  apply_state_to_board(new_state, board);
 }
 
-// Wypisuje plansze.
-void write_board(struct board board) {
+void print_board(Board board) {
   for (int i = 0; i < board.lines; ++i) {
     for (int j = 0; j < board.board[i].len; ++j)
       putchar(board.board[i].line[j]);
@@ -393,46 +415,46 @@ void write_board(struct board board) {
   }
 }
 
-// Obsluga kolejnych ruchow gracza.
-void sokoban(Tstack** states, struct board* board) {
-  int c = getchar();
-  while (c != '.') {
-    if (c - '0') {
-      Tstate state;
-      top(states, &state);
-      c = turn_name_to_index(c);
-      int dir = getchar();
-      dir -= '0';
-      struct pos boxNewPos;
-      translate_move_to_pos(&boxNewPos, state, c, dir / 2 - 1);
-      /* Funkcja uzyta nizej dla obliczenia wspolrzednych gracza takich,
-      zeby mogl popchnac skrzynie. */
-      struct pos dest;
-      translate_move_to_pos(&dest, state, c, (10 - dir) / 2 - 1);
-      if (validate_pos(*board, boxNewPos) && validate_pos(*board, dest) &&
-          find_path(*board, state.player, dest))
-        make_move(states, board, c, boxNewPos);
-    } else {
+// Process the player's commands in a loop and print board states.
+void sokoban(Stack** states, Board* board) {
+  for (int c = my_getchar(); c != '.'; c = my_getchar()) {
+    if (c == '0') {
       undo(states, board);
+    } else if ('a' <= c && c <= 'z') {
+      State state;
+      top(states, &state);
+      c = box_name_to_index(c);
+      int ch = my_getchar();
+      if (strchr(ALLOWED_DIRECTIONS, ch) == NULL) {
+        perror("Expected a direction in the form of 2 | 4 | 6 | 8.");
+        clean_up(board, states);
+        exit(EXIT_FAILURE);
+      }
+      Direction dir = direction(ch);
+      Pos box_new_pos, char_pos_before_push;
+      move_to_dest_pos(&box_new_pos, state, c, dir);
+      move_to_dest_pos(&char_pos_before_push, state, c, opposite(dir));
+      if (is_valid_and_free(*board, box_new_pos) &&
+          is_valid_and_free(*board, char_pos_before_push) &&
+          path_exists(*board, state.player, char_pos_before_push))
+        make_move(states, board, c, box_new_pos);
+    } else {
+      perror("Expected a name of the box to move or 0.");
+      clean_up(board, states);
+      exit(EXIT_FAILURE);
     }
-    write_board(*board);
-    c = getchar();
-    c = getchar();
+    print_board(*board);
+    if (my_getchar() != '\n') {
+      perror("Expected newline character.");
+      clean_up(board, states);
+      exit(EXIT_FAILURE);
+    }
   }
 }
 
-// Sprzata po programie.
-void clean_up(struct board* board, Tstack** states) {
-  for (int i = 0; i < board->lines; ++i) free(board->board[i].line);
-  free(board->board);
-  clear(states);
-}
-
 int main() {
-  struct board board;
-  Tstack* states;
   init_sequence(&states, &board);
-  write_board(board);
+  print_board(board);
   sokoban(&states, &board);
   clean_up(&board, &states);
   return 0;
