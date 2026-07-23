@@ -15,6 +15,10 @@ one of the example boards from the [tests](tests) directory.
 cat tests/board7.txt - | build/sokoban
 ```
 
+## Demo
+
+![demo](assets/demo.gif)
+
 ## Introduction
 
 [Sokoban](https://en.wikipedia.org/wiki/Sokoban) is a single player puzzle game
