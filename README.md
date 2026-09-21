@@ -1,6 +1,8 @@
 # cokoban
 
-Sokoban game which can be played in the terminal.
+Sokoban game which can be played in the terminal. This was an assignment in the
+course on imperative programming at the University of Warsaw. Specification,
+requirements and tests were provided as part of the assignment.
 
 Project works for a Linux system with a working gcc compiler, to run tests you
 should have [valgrind](https://valgrind.org/). A [Makefile](Makefile) with a
